@@ -1,13 +1,17 @@
 #!/usr/bin/env stack
--- stack --resolver lts-7.15 --install-ghc runghc --package turtle --package hostname --package path
+-- stack --resolver lts-7.15 --install-ghc runghc --package turtle --package path --package path-io
 
-{-# LANGUAGE OverloadedStrings, TemplateHaskell #-}
+{-# LANGUAGE OverloadedStrings, TemplateHaskell, NamedFieldPuns #-}
 
 import Data.Text (pack, unpack)
-import Network.HostName (getHostName)
 import Path (Abs, Dir, Path, mkAbsDir, mkRelDir, parseAbsDir)
+import Path.IO (doesDirExist)
 import Prelude hiding (FilePath)
-import Turtle
+import Turtle hiding (find)
+import Data.List (find)
+import Data.Foldable (forM_)
+import Data.Time.Clock (utctDay)
+import Data.Time.Calendar (showGregorian)
 
 -- CONFIG
 
@@ -21,23 +25,25 @@ folders = [ "Documents"
 
 documents = Folder "Documents" $(mkAbsDir "/home/stefan/Documents")
 
-icarus = Host "icarus"
+icarus = Machine "icarus"
            [ documents
            , Folder "icarus-home" $(mkAbsDir "/home/stefan/") ]
 
-laptop = Host "stefan-laptop"
+laptop = Machine "stefan-laptop"
   [ documents
   , Folder "laptop-home" $(mkAbsDir "/home/stefan") ]
 
-hosts :: [ Host ]
-hosts = [ icarus, laptop ]
+machines :: [ Machine ]
+machines = [ icarus, laptop ]
 
 -- CODE
 data Folder = Folder { foldername :: Text
                      , folderpath :: Path Abs Dir }
+  deriving Show
 
-data Host = Host { hostname :: Text
-                 , hostfolders :: [ Folder ] }
+data Machine = Machine { machinename :: Text
+                       , machinefolders :: [ Folder ] }
+  deriving Show
 
 textToAbsDir :: Text -> Maybe (Path Abs Dir)
 textToAbsDir t = parseAbsDir (unpack t)
@@ -45,11 +51,21 @@ textToAbsDir t = parseAbsDir (unpack t)
 parser :: Parser (Path Abs Dir)
 parser = arg textToAbsDir "backuproot" "ABSOLUTE path to folder where backups should be placed, e.g. /mnt/usbdrive/"
 
+checkFolder (Folder { foldername, folderpath }) = do
+  exists <- doesDirExist folderpath
+  if exists then pure () else do
+    err $ format ("Folder "%w%" does not exist in the filesystem at "%w%".") foldername folderpath
+    exit (ExitFailure 1)
+
 main :: IO ()
 main = do
   backupRoot <- options "A simple backup script" parser
-  hostname <- getHostName -- fmap pack getHostName :: IO Text
-  printf ("We're on host "%w%" backing up into folder "%w%".\n") hostname backupRoot
+  host <- hostname
+  printf ("We're on host "%w%" backing up into folder "%w%".\n") host backupRoot
+  let (Just m) = find (\h -> machinename h == host) machines
+  forM_ (machinefolders m) checkFolder
+  t <- date
+  echo $ pack $ showGregorian (utctDay t)
 
 {- DESIGN
 
