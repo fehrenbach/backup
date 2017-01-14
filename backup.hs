@@ -10,6 +10,7 @@ import Data.List (find, (\\))
 import Data.Foldable (forM_)
 import Data.Time.Clock (utctDay)
 import Data.Time.Calendar (showGregorian)
+import qualified Control.Foldl as Foldl
 
 -- CONFIG
 
@@ -69,10 +70,10 @@ rsync backupRoot today fs f@(Folder { foldername, folderpath }) = do
   excludes <- excludeList source fs
   target <- toText $ backupRoot </> fromText foldername </> fromText today
   -- TODO --link-dest=
-  pure ("rsync", flags <> excludes <> [source, target])
+  pure $ flags <> excludes <> [source, target]
 
 main :: IO ()
-main = do
+main = sh $ do
   backupRoot <- options "A simple backup script" parser
   host <- hostname
   printf ("We're on host "%w%" backing up into folder "%w%".\n") host backupRoot
@@ -80,9 +81,19 @@ main = do
   forM_ (machinefolders m) checkFolder
   today <- pack . showGregorian . utctDay <$> date
   -- todayDir <- parseRelDir today
+  
   echo $ pack $ show $ backupRoot </> fromText today
   -- forM_ (machinefolders m) (\f -> hardlinkFolder backupRoot f todayDir)
-  forM_ (machinefolders m) (\f -> echo $ pack $ show $ rsync backupRoot today (machinefolders m) f)
+  f <- select $ machinefolders m
+  mmax <- fold (ls (backupRoot </> fromText (foldername f))) Foldl.maximum
+  case mmax of
+    Nothing -> die "oh noes!"
+    Just dir -> echo $ pack $ show dir
+  let rsyncArgs = rsync backupRoot today (machinefolders m) f
+  echo $ pack $ show $ rsyncArgs
+--  view $ 
+  
+  -- forM_ (machinefolders m) (\f -> echo $ pack $ show $ rsync backupRoot today (machinefolders m) f)
 
 {- DESIGN
 
