@@ -3,7 +3,7 @@
 
 {-# LANGUAGE OverloadedStrings, TemplateHaskell, NamedFieldPuns #-}
 
-import Data.Text (pack, unpack)
+import Data.Text (pack, unpack, isPrefixOf)
 import Prelude hiding (FilePath)
 import Turtle hiding (find)
 import Data.List (find, (\\))
@@ -30,6 +30,7 @@ icarus = Machine "icarus"
 
 laptop = Machine "stefan-laptop"
   [ documents
+  , Folder "code" "/home/stefan/src"
   , Folder "laptop-home" "/home/stefan" ]
 
 machines :: [ Machine ]
@@ -53,13 +54,22 @@ checkFolder (Folder { foldername, folderpath }) = do
     err $ format ("Folder "%w%" does not exist in the filesystem at "%w%".") foldername folderpath
     exit (ExitFailure 1)
 
-excludeList [] = []
-excludeList (Folder { folderpath } : fs) =
-  -- need toText, which returns Either. Because filepaths can have some encoding weirdness. Who'd have thought. God. Writing correct software is hard and fucking annoying. No wonder nobody bothers.
-  "--exclude=" <> (show folderpath) : excludeList fs
+excludeList :: Text -> [Folder] -> Either Text [Text]
+excludeList _ [] = Right []
+excludeList b (f : fs) = do
+  t <- toText (folderpath f)
+  ts <- excludeList b fs
+  if t `isPrefixOf` b
+    then pure ts
+    else pure ("--exclude=" <> t : ts)
 
-rsync f@(Folder { foldername, folderpath }) fs =
-  ("rsync" <> " " <> "-av" <> " ") <> (concat (excludeList (fs \\ [f]))) <> " --link-dir=TODOpreviousbackup" <> " " <> show folderpath <> " TARGET"
+rsync backupRoot today fs f@(Folder { foldername, folderpath }) = do
+  flags <- pure ["-a", "-v"]
+  source <- toText folderpath
+  excludes <- excludeList source fs
+  target <- toText $ backupRoot </> fromText foldername </> fromText today
+  -- TODO --link-dest=
+  pure ("rsync", flags <> excludes <> [source, target])
 
 main :: IO ()
 main = do
@@ -72,7 +82,7 @@ main = do
   -- todayDir <- parseRelDir today
   echo $ pack $ show $ backupRoot </> fromText today
   -- forM_ (machinefolders m) (\f -> hardlinkFolder backupRoot f todayDir)
-  forM_ (machinefolders m) (\f -> echo $ pack $ rsync f (machinefolders m))
+  forM_ (machinefolders m) (\f -> echo $ pack $ show $ rsync backupRoot today (machinefolders m) f)
 
 {- DESIGN
 
