@@ -1,14 +1,12 @@
 #!/usr/bin/env stack
--- stack --resolver lts-7.15 --install-ghc runghc --package turtle --package path --package path-io
+-- stack --resolver lts-7.15 --install-ghc runghc --package turtle
 
 {-# LANGUAGE OverloadedStrings, TemplateHaskell, NamedFieldPuns #-}
 
 import Data.Text (pack, unpack)
-import Path (Abs, Dir, Path, mkAbsDir, mkRelDir, parseAbsDir)
-import Path.IO (doesDirExist)
 import Prelude hiding (FilePath)
 import Turtle hiding (find)
-import Data.List (find)
+import Data.List (find, (\\))
 import Data.Foldable (forM_)
 import Data.Time.Clock (utctDay)
 import Data.Time.Calendar (showGregorian)
@@ -23,39 +21,45 @@ folders = [ "Documents"
           , "icarus-home"
           ]
 
-documents = Folder "Documents" $(mkAbsDir "/home/stefan/Documents")
+documents = Folder "Documents" "/home/stefan/Documents"
 
 icarus = Machine "icarus"
            [ documents
-           , Folder "icarus-home" $(mkAbsDir "/home/stefan/") ]
+           , Folder "code" "/home/stefan/src"
+           , Folder "icarus-home" "/home/stefan/" ]
 
 laptop = Machine "stefan-laptop"
   [ documents
-  , Folder "laptop-home" $(mkAbsDir "/home/stefan") ]
+  , Folder "laptop-home" "/home/stefan" ]
 
 machines :: [ Machine ]
 machines = [ icarus, laptop ]
 
 -- CODE
 data Folder = Folder { foldername :: Text
-                     , folderpath :: Path Abs Dir }
-  deriving Show
+                     , folderpath :: FilePath }
+  deriving (Show, Eq)
 
 data Machine = Machine { machinename :: Text
                        , machinefolders :: [ Folder ] }
   deriving Show
 
-textToAbsDir :: Text -> Maybe (Path Abs Dir)
-textToAbsDir t = parseAbsDir (unpack t)
-
-parser :: Parser (Path Abs Dir)
-parser = arg textToAbsDir "backuproot" "ABSOLUTE path to folder where backups should be placed, e.g. /mnt/usbdrive/"
+parser :: Parser FilePath
+parser = argPath "backuproot" "ABSOLUTE path to folder where backups should be placed, e.g. /mnt/usbdrive/"
 
 checkFolder (Folder { foldername, folderpath }) = do
-  exists <- doesDirExist folderpath
+  exists <- testdir folderpath
   if exists then pure () else do
     err $ format ("Folder "%w%" does not exist in the filesystem at "%w%".") foldername folderpath
     exit (ExitFailure 1)
+
+excludeList [] = []
+excludeList (Folder { folderpath } : fs) =
+  -- need toText, which returns Either. Because filepaths can have some encoding weirdness. Who'd have thought. God. Writing correct software is hard and fucking annoying. No wonder nobody bothers.
+  "--exclude=" <> (show folderpath) : excludeList fs
+
+rsync f@(Folder { foldername, folderpath }) fs =
+  ("rsync" <> " " <> "-av" <> " ") <> (concat (excludeList (fs \\ [f]))) <> " --link-dir=TODOpreviousbackup" <> " " <> show folderpath <> " TARGET"
 
 main :: IO ()
 main = do
@@ -64,8 +68,11 @@ main = do
   printf ("We're on host "%w%" backing up into folder "%w%".\n") host backupRoot
   let (Just m) = find (\h -> machinename h == host) machines
   forM_ (machinefolders m) checkFolder
-  t <- date
-  echo $ pack $ showGregorian (utctDay t)
+  today <- pack . showGregorian . utctDay <$> date
+  -- todayDir <- parseRelDir today
+  echo $ pack $ show $ backupRoot </> fromText today
+  -- forM_ (machinefolders m) (\f -> hardlinkFolder backupRoot f todayDir)
+  forM_ (machinefolders m) (\f -> echo $ pack $ rsync f (machinefolders m))
 
 {- DESIGN
 
@@ -82,7 +89,10 @@ Put backups into folders $BACKUPROOT/$FOLDER/$DATE.
 
 Sanity-check configuration (host is defined, all paths exists on host, every configured folder has a folder on backup disk, every on disk folder is configured).
 
-Make a hardlink copy of the latest backup (cp -al), then overwrite with rsync.
+Rsync manpage suggests it can do hardlinks automatically, so this should do it:
+
+  `rsync -av --link-dest=/$BACKUPROOT/$FOLDERNAME/$LATESTDATE /$FOLDERPATH /$BACKUPROOT/$FOLDERNAME/$TODAY`
+
 
 Would be cool features:
 1. Mark folders that are expected to not change (Music/, Pictures/, ...) and
