@@ -3,7 +3,7 @@
 
 {-# LANGUAGE OverloadedStrings, TemplateHaskell, NamedFieldPuns #-}
 
-import Data.Text (pack, unpack, isPrefixOf)
+import Data.Text (pack, unpack, isPrefixOf, intercalate)
 import Prelude hiding (FilePath)
 import Turtle hiding (find)
 import Data.List (find, (\\))
@@ -14,24 +14,18 @@ import qualified Control.Foldl as Foldl
 
 -- CONFIG
 
--- backup target folder names
-folders :: [ Text ]
-folders = [ "Documents"
-          , "Music"
-          , "laptop-home"
-          , "icarus-home"
-          ]
-
 documents = Folder "Documents" "/home/stefan/Documents"
+music = Folder "Music" "/home/stefan/Music"
 
 icarus = Machine "icarus"
-           [ documents
-           , Folder "code" "/home/stefan/src"
-           , Folder "icarus-home" "/home/stefan/" ]
+  [ documents
+  , music
+  , Folder "icarus-home" "/home/stefan/" ]
 
 laptop = Machine "stefan-laptop"
   [ documents
-  , Folder "code" "/home/stefan/src"
+  , music
+  , Folder "Pictures" "/home/stefan/Pictures"
   , Folder "laptop-home" "/home/stefan" ]
 
 machines :: [ Machine ]
@@ -64,13 +58,13 @@ excludeList b (f : fs) = do
     then pure ts
     else pure ("--exclude=" <> t : ts)
 
-rsync backupRoot today fs f@(Folder { foldername, folderpath }) = do
-  flags <- pure ["-a", "-v"]
+rsync backupRoot previous today fs f@(Folder { foldername, folderpath }) = do
+  flags <- pure ["-a", "--info=progress2"]
   source <- toText folderpath
   excludes <- excludeList source fs
   target <- toText $ backupRoot </> fromText foldername </> fromText today
-  -- TODO --link-dest=
-  pure $ flags <> excludes <> [source, target]
+  linkDest <- toText previous
+  pure $ flags <> excludes <> ["--link-dest=" <> linkDest, source, target]
 
 main :: IO ()
 main = sh $ do
@@ -80,20 +74,16 @@ main = sh $ do
   let (Just m) = find (\h -> machinename h == host) machines
   forM_ (machinefolders m) checkFolder
   today <- pack . showGregorian . utctDay <$> date
-  -- todayDir <- parseRelDir today
   
-  echo $ pack $ show $ backupRoot </> fromText today
-  -- forM_ (machinefolders m) (\f -> hardlinkFolder backupRoot f todayDir)
   f <- select $ machinefolders m
-  mmax <- fold (ls (backupRoot </> fromText (foldername f))) Foldl.maximum
-  case mmax of
-    Nothing -> die "oh noes!"
-    Just dir -> echo $ pack $ show dir
-  let rsyncArgs = rsync backupRoot today (machinefolders m) f
-  echo $ pack $ show $ rsyncArgs
---  view $ 
-  
-  -- forM_ (machinefolders m) (\f -> echo $ pack $ show $ rsync backupRoot today (machinefolders m) f)
+  mprevious <- fold (ls (backupRoot </> fromText (foldername f))) Foldl.maximum
+  case mprevious of
+    Nothing -> die $ format ("Can't find a previous backup in "%fp) (backupRoot </> fromText (foldername f))
+    Just previous | previous /= backupRoot </> fromText (foldername f) </> fromText today -> do
+      let (Right rsyncArgs) = rsync backupRoot previous today (machinefolders m) f
+      printf ("About to run rsync "%s%"\n") (intercalate " " rsyncArgs)
+      procs "rsync" rsyncArgs empty
+    Just p -> die $ format ("There is a backup for today already at "%fp) p
 
 {- DESIGN
 
@@ -108,13 +98,6 @@ Subject of backup are folders, e.g.:
 
 Put backups into folders $BACKUPROOT/$FOLDER/$DATE.
 
-Sanity-check configuration (host is defined, all paths exists on host, every configured folder has a folder on backup disk, every on disk folder is configured).
-
-Rsync manpage suggests it can do hardlinks automatically, so this should do it:
-
-  `rsync -av --link-dest=/$BACKUPROOT/$FOLDERNAME/$LATESTDATE /$FOLDERPATH /$BACKUPROOT/$FOLDERNAME/$TODAY`
-
-
 Would be cool features:
 1. Mark folders that are expected to not change (Music/, Pictures/, ...) and
    warn if they do (except for new files).
@@ -122,4 +105,5 @@ Would be cool features:
    Should work recursively (Mail in Documents, Documents in Home). Rsync excludes are a bit weird.
 3. Warn when we are running low on disk space (e.g. 2x current backup wouldn't fit).
    Suggest old backups to delete (exponential backoff/daily+weekly+monthly+yearly/something).
+4. Sanity check configuration before run: folders present on host, folders present on backup disk, folders on disk are configured, ...
 -}
