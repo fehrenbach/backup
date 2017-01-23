@@ -60,7 +60,8 @@ excludeList b (f : fs) = do
 
 rsync backupRoot previous today fs f@(Folder { foldername, folderpath }) = do
   flags <- pure ["-a", "--info=progress2"]
-  source <- toText folderpath
+  -- Trailing slash makes rsync copy the contents of the directory, not the directory itself
+  source <- (<> "/") <$> toText folderpath
   excludes <- excludeList source fs
   target <- toText $ backupRoot </> fromText foldername </> fromText today
   linkDest <- toText previous
