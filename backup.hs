@@ -3,7 +3,7 @@
 
 {-# LANGUAGE OverloadedStrings, TemplateHaskell, NamedFieldPuns #-}
 
-import Data.Text (pack, unpack, isPrefixOf, intercalate)
+import Data.Text (commonPrefixes, pack, unpack, intercalate)
 import Prelude hiding (FilePath)
 import Turtle hiding (find)
 import Data.List (find, (\\))
@@ -20,7 +20,7 @@ music = Folder "Music" "/home/stefan/Music"
 icarus = Machine "icarus"
   [ documents
   , music
-  , Folder "icarus-home" "/home/stefan/" ]
+  , Folder "icarus-home" "/home/stefan" ]
 
 laptop = Machine "stefan-laptop"
   [ documents
@@ -54,9 +54,10 @@ excludeList _ [] = Right []
 excludeList b (f : fs) = do
   t <- toText (folderpath f)
   ts <- excludeList b fs
-  if t `isPrefixOf` b
-    then pure ts
-    else pure ("--exclude=" <> t : ts)
+  case commonPrefixes b t of
+    -- Exclude only subfolders (b is proper prefix of t), but strip common prefix and anchor with "/"
+    Just (_, "", t') -> pure ("--exclude=/" <> t' : ts)
+    _ -> pure ts
 
 rsync backupRoot previous today fs f@(Folder { foldername, folderpath }) = do
   flags <- pure ["-a", "--info=progress2"]
